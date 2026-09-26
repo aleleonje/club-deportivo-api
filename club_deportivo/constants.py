@@ -42,3 +42,11 @@ DB_USER     = os.getenv('DB_USER', 'root')
 DB_PASSWORD = os.getenv('DB_PASSWORD', 'root')
 DB_NAME     = os.getenv('DB_NAME', 'club_deportivo_db')
 DB_URL      = f'mysql+mysqlconnector://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
+
+# Errores en reservas
+ERROR_CODE_SOCIO_NOT_FOUND   = 'ERROR_SOCIO_NO_ENCONTRADO'
+ERROR_CODE_ENTIDAD_INACTIVA  = 'ERROR_ENTIDAD_INACTIVA'
+ERROR_CODE_SUPERPOSICION     = 'ERROR_SUPERPOSICION'
+
+# Filtros aceptados por GET/reservas
+CAMPOS_FILTRO_RESERVAS = ('id_cancha', 'id_socio', 'estado', 'fecha_desde', 'fecha_hasta')

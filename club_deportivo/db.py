@@ -170,3 +170,117 @@ def obtener_canchas_disponibles(filtros: dict, limit: int, offset: int) -> list[
     """
 
     return ejecutar_consulta(sql, {**parametros, 'limit': limit, 'offset': offset})
+
+TABLA_RESERVA = 'reservas'
+TABLA_SOCIO = 'socios'
+COLUMNAS_RESERVA = 'id, id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin, estado, precio_hora, precio_total'
+ 
+ 
+def _condiciones_reservas(filtros: dict) -> tuple[str, dict]:
+    condiciones = []
+    parametros = {}
+ 
+    if 'id_cancha' in filtros:
+        condiciones.append('id_cancha = :id_cancha')
+        parametros['id_cancha'] = filtros['id_cancha']
+ 
+    if 'id_socio' in filtros:
+        condiciones.append('id_socio = :id_socio')
+        parametros['id_socio'] = filtros['id_socio']
+ 
+    if 'estado' in filtros:
+        condiciones.append('estado = :estado')
+        parametros['estado'] = filtros['estado']
+ 
+    if 'fecha_desde' in filtros:
+        condiciones.append('DATE(fecha_hora_inicio) >= :fecha_desde')
+        parametros['fecha_desde'] = filtros['fecha_desde']
+ 
+    if 'fecha_hasta' in filtros:
+        condiciones.append('DATE(fecha_hora_inicio) <= :fecha_hasta')
+        parametros['fecha_hasta'] = filtros['fecha_hasta']
+ 
+    where = f"WHERE {' AND '.join(condiciones)}" if condiciones else ''
+ 
+    return where, parametros
+ 
+ 
+def contar_reservas(filtros: dict) -> int:
+    where, parametros = _condiciones_reservas(filtros)
+    sql = f'SELECT COUNT(*) AS total FROM {TABLA_RESERVA} {where}'
+    filas = ejecutar_consulta(sql, parametros)
+ 
+    return filas[0]['total']
+ 
+ 
+def obtener_reservas(filtros: dict, limit: int, offset: int) -> list[dict]:
+    where, parametros = _condiciones_reservas(filtros)
+
+    sql = f"""
+        SELECT {COLUMNAS_RESERVA}
+        FROM {TABLA_RESERVA}
+        {where}
+        ORDER BY id ASC
+        LIMIT :limit OFFSET :offset
+    """
+ 
+    return ejecutar_consulta(sql, {**parametros, 'limit': limit, 'offset': offset})
+ 
+# Funcion para eveitar superposiciones en una sola transaccion
+ 
+def crear_reserva_atomica(id_socio: int, id_cancha: int, inicio, fin) -> dict:
+    """
+    Devuelve {'error': (code, status, description)} si algo falla, o {'reserva': {...}}.
+    """
+    with obtener_conexion() as conexion:
+        with conexion.begin():
+            cancha = conexion.execute(
+                text('SELECT id, precio_hora, activa FROM canchas WHERE id = :id FOR UPDATE'),
+                {'id': id_cancha}).mappings().first()
+            if cancha is None:
+                return {'error': ('ERROR_CANCHA_NO_ENCONTRADA', 404, f"No existe una cancha con id '{id_cancha}'")}
+ 
+            socio = conexion.execute(
+                text(f'SELECT id, activo FROM {TABLA_SOCIO} WHERE id = :id FOR UPDATE'),
+                {'id': id_socio}).mappings().first()
+            if socio is None:
+                return {'error': ('ERROR_SOCIO_NO_ENCONTRADO', 404, f"No existe un socio con id '{id_socio}'")}
+ 
+            if not cancha['activa']:
+                return {'error': ('ERROR_ENTIDAD_INACTIVA', 409, 'La cancha está inactiva')}
+            if not socio['activo']:
+                return {'error': ('ERROR_ENTIDAD_INACTIVA', 409, 'El socio está inactivo')}
+            solape_cancha = text(f"""
+                SELECT 1 FROM {TABLA_RESERVA}
+                WHERE id_cancha = :valor AND estado = 'confirmada'
+                  AND fecha_hora_inicio < :fin AND fecha_hora_fin > :inicio
+                LIMIT 1
+            """)
+            if conexion.execute(solape_cancha, {'valor': id_cancha, 'inicio': inicio, 'fin': fin}).first():
+                return {'error': ('ERROR_SUPERPOSICION', 409,
+                                  'La cancha ya tiene una reserva confirmada que se superpone con el intervalo')}
+ 
+            solape_socio = text(f"""
+                SELECT 1 FROM {TABLA_RESERVA}
+                WHERE id_socio = :valor AND estado = 'confirmada'
+                  AND fecha_hora_inicio < :fin AND fecha_hora_fin > :inicio
+                LIMIT 1
+            """)
+            if conexion.execute(solape_socio, {'valor': id_socio, 'inicio': inicio, 'fin': fin}).first():
+                return {'error': ('ERROR_SUPERPOSICION', 409,
+                                  'El socio ya tiene una reserva confirmada que se superpone con el intervalo')}
+ 
+            horas = int((fin - inicio).total_seconds() // 3600)
+            precio_hora = cancha['precio_hora']
+            precio_total = horas * precio_hora
+ 
+            resultado = conexion.execute(text(f"""
+                INSERT INTO {TABLA_RESERVA}
+                    (id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin, estado, precio_hora, precio_total)
+                VALUES (:id_socio, :id_cancha, :inicio, :fin, 'confirmada', :precio_hora, :precio_total)
+            """), {'id_socio': id_socio, 'id_cancha': id_cancha, 'inicio': inicio, 'fin': fin,
+                   'precio_hora': precio_hora, 'precio_total': precio_total})
+ 
+            fila = conexion.execute(text(f'SELECT {COLUMNAS_RESERVA} FROM {TABLA_RESERVA} WHERE id = :id'),
+                                    {'id': resultado.lastrowid}).mappings().first()
+            return {'reserva': dict(fila)}
