@@ -284,3 +284,32 @@ def crear_reserva_atomica(id_socio: int, id_cancha: int, inicio, fin) -> dict:
             fila = conexion.execute(text(f'SELECT {COLUMNAS_RESERVA} FROM {TABLA_RESERVA} WHERE id = :id'),
                                     {'id': resultado.lastrowid}).mappings().first()
             return {'reserva': dict(fila)}
+
+
+def obtener_reserva_por_id(id_reserva: int) -> dict:
+    sql = f'SELECT {COLUMNAS_RESERVA} FROM {TABLA_RESERVA} WHERE id = :id'
+    filas = ejecutar_consulta(sql, {'id': id_reserva})
+
+    return filas[0] if filas else {}
+
+
+def actualizar_estado_reserva(id_reserva: int, estado_actual: str, estado_nuevo: str) -> bool:
+    """
+    Cambia el estado solo si la reserva sigue en `estado_actual`.
+    Retorna False si otro pedido la modifico mientras tanto (no se actualiza nada).
+    """
+    sql = f"""
+        UPDATE {TABLA_RESERVA}
+        SET estado = :estado_nuevo
+        WHERE id = :id AND estado = :estado_actual
+    """
+
+    with obtener_conexion() as conexion:
+        with conexion.begin():
+            resultado = conexion.execute(text(sql), {
+                'id': id_reserva,
+                'estado_actual': estado_actual,
+                'estado_nuevo': estado_nuevo,
+            })
+
+        return resultado.rowcount == 1

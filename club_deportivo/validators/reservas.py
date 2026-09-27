@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
- 
+from re import fullmatch
+
 from ..constants import (
     ERROR_CODE_VALIDACION,
     ESTADOS_RESERVA,
@@ -16,7 +17,10 @@ from ..constants import (
 from ..utils import construir_error_api
  
 GMT_3 = timezone(timedelta(hours=-3))
- 
+
+# Formato exigido por el enunciado: YYYY-MM-DDTHH:MM:SS.ffffff-03:00 (6 decimales)
+PATRON_FECHA_HORA = r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}-03:00'
+
  
 def _error(description: str) -> ValueError:
     return ValueError(construir_error_api(
@@ -128,7 +132,7 @@ def validar_body_reserva(body: dict) -> dict:
  
 def _parsear_fecha_hora_iso(valor, nombre_campo):
    
-    if not isinstance(valor, str) or not valor.endswith('-03:00'):
+    if not isinstance(valor, str) or not fullmatch(PATRON_FECHA_HORA, valor):
         raise _error(f"El campo '{nombre_campo}' debe tener formato YYYY-MM-DDTHH:MM:SS.ffffff-03:00")
     try:
         return datetime.strptime(valor[:-6], '%Y-%m-%dT%H:%M:%S.%f')
@@ -151,3 +155,31 @@ def _validar_intervalo_reserva(inicio, fin) -> None:
         raise _error(f'La reserva debe durar entre {DURACION_MINIMA_HORAS} y {DURACION_MAXIMA_HORAS} horas')
     if inicio <= datetime.now(GMT_3).replace(tzinfo=None):
         raise _error('La reserva debe comenzar en el futuro')
+
+
+def validar_id_reserva(valor: str) -> int:
+    if not fullmatch(r'[0-9]+', str(valor)) or int(valor) <= 0:
+        raise _error(f"El identificador '{valor}' debe ser un entero positivo")
+
+    return int(valor)
+
+
+def validar_body_estado(body: dict) -> str:
+    """Valida el body del PUT /reservas/{id}/estado: {"estado": "cancelada"}."""
+    if not isinstance(body, dict):
+        raise _error('El cuerpo debe ser un objeto JSON')
+
+    if not body:
+        raise _error("El cuerpo no puede estar vacio: debe incluir el campo 'estado'")
+
+    _validar_campos_desconocidos(body, ('estado',))
+
+    if 'estado' not in body:
+        raise _error("Falta el campo obligatorio 'estado'")
+
+    estado = body['estado']
+
+    if not isinstance(estado, str) or estado not in ESTADOS_RESERVA:
+        raise _error(f"Estado desconocido. Debe ser uno de: {', '.join(ESTADOS_RESERVA)}")
+
+    return estado
